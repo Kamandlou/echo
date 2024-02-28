@@ -114,7 +114,7 @@ func (b *DefaultBinder) Bind(i interface{}, c Context) (err error) {
 	// Only bind query parameters for GET/DELETE/HEAD to avoid unexpected behavior with destination struct binding from body.
 	// For example a request URL `&id=1&lang=en` with body `{"id":100,"lang":"de"}` would lead to precedence issues.
 	// The HTTP method check restores pre-v4.1.11 behavior to avoid these problems (see issue #1670)
-  method := c.Request().Method
+	method := c.Request().Method
 	if method == http.MethodGet || method == http.MethodDelete || method == http.MethodHead {
 		if err = b.BindQueryParams(c, i); err != nil {
 			return err
@@ -131,10 +131,29 @@ func (b *DefaultBinder) bindData(destination interface{}, data map[string][]stri
 	typ := reflect.TypeOf(destination).Elem()
 	val := reflect.ValueOf(destination).Elem()
 
-	// Map
-	if typ.Kind() == reflect.Map {
+	// Support binding to limited Map destinations:
+	// - map[string][]string,
+	// - map[string]string <-- (binds first value from data slice)
+	// - map[string]interface{}
+	// You are better off binding to struct but there are user who want this map feature. Source of data for these cases are:
+	// params,query,header,form as these sources produce string values, most of the time slice of strings, actually.
+	if typ.Kind() == reflect.Map && typ.Key().Kind() == reflect.String {
+		k := typ.Elem().Kind()
+		isElemInterface := k == reflect.Interface
+		isElemString := k == reflect.String
+		isElemSliceOfStrings := k == reflect.Slice && typ.Elem().Elem().Kind() == reflect.String
+		if !(isElemSliceOfStrings || isElemString || isElemInterface) {
+			return nil
+		}
+		if val.IsNil() {
+			val.Set(reflect.MakeMap(typ))
+		}
 		for k, v := range data {
-			val.SetMapIndex(reflect.ValueOf(k), reflect.ValueOf(v[0]))
+			if isElemString {
+				val.SetMapIndex(reflect.ValueOf(k), reflect.ValueOf(v[0]))
+			} else {
+				val.SetMapIndex(reflect.ValueOf(k), reflect.ValueOf(v))
+			}
 		}
 		return nil
 	}
